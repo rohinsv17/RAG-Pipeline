@@ -1,0 +1,94 @@
+[
+  {
+    "question": "What is Artemis II and when is it expected to launch?",
+    "expected_chunks": [
+      "Artemis II, planned as the first crewed test flight of the Space Launch System (SLS) and the Orion spacecraft, is slated for launch in early spring 2026."
+    ],
+    "expected_response": "Artemis II is the first crewed test flight of the Space Launch System and the Orion spacecraft, expected to launch in early spring 2026"
+  },
+  {
+    "question": "When is the ISS scheduled to deorbit?",
+    "expected_chunks": [
+      "NASA is targeting 2030 to  decommission  ISS,  and  additional  extensions  would  need  to  carefully  consider  the  growing  risks."
+    ],
+    "expected_response": "The ISS is scheduled to be decommissioned in 2030."
+  },
+  {
+    "question": "How many personnel is NASA expected to have by the end of 2026?",
+    "expected_chunks": [
+      "Figure 2 shows NASA’s manpower levels over the past several decades, with a prediction that by the end of 2026, NASA will have approximately 15,000 personnel, its smallest workforce since 1960."
+    ],
+    "expected_response": "NASA is expected to have approximately 15,000 personnel by the end of 2026."
+  },
+  {
+    "question": "What is the prompt for Computer Game and Simulation Programming?",
+    "expected_chunks": [
+      "Game Topic: Career Quest Create an engaging game where players jump into mini-worlds that showcase different careers. In each career world, players must: • Experience a short scenario that captures what the job is like • Complete skill-based challenges and tasks unique to that profession"
+    ],
+    "expected_response": "The prompt for Computer Game & Simulation Programming is to create an engaging game where players jump into mini-worlds that showcase different careers."
+  },
+  {
+    "question": "What are requirements for Computer Game and Simulation Programming?",
+    "expected_chunks": [
+      "The game must: • Be playable on a device using Windows 10, Mac OS, a modern web browser, or a mobile platform • Be secure • Have no game-breaking bugs"
+    ],
+    "expected_response": "The requirements for Computer Game & Simulation Programming game include that it must be playable on a modern OS, web browser, or mobile platform, be secure, and have no game-breaking bugs."
+  },
+  {
+    "question": "What are examples of prohibited items?",
+    "expected_chunks": [
+      "Restricted Items • Animals, except for authorized service animals. • Food, which may be used for display only and may not be consumed by judges. • Links and QR codes, which may be shown but may not be scanned or clicked by judges at any time."
+    ],
+    "expected_response": "Examples of prohibited items are animals, food, and links and QR codes."
+  },
+  {
+    "question": "What are research expectations?",
+    "expected_chunks": [
+      "Research • Information must be supported by credible, well-documented sources. • Any use of copyrighted material, images, logos, or trademarks must be properly documented.",
+      "Compelling evidence from Sources/References"
+    ],
+    "expected_response": "Research expectations are that information should be supported by credible and well-documented sources, and use of copyrighted material should be documented."
+  },
+  {
+    "question": "What is the presentation timing structure?",
+    "expected_chunks": [
+      "Details Timing Structure • Equipment Set-Up: 3 minutes • Presentation: 7 minutes (a one-minute warning will be provided) • Question & Answer (Q&A): 3 minutes • Note: Each time segment is exclusive. Once the 3-minute set-up period ends, the 7-minute presentation time begins automatically. Competitors may not shift time between segments."
+    ],
+    "expected_response": "The presentation timing structure is 3 minutes for equipment set-up, 7 minutes for presentation, and 3 minutes for Q&A."
+  },
+  {
+    "question": "What are the phases of a presentation?",
+    "expected_chunks": [
+      "This event consists of two phases: a preliminary presentation and a final presentation."
+    ],
+    "expected_response": "The phases of a presentation event consist of a preliminary presentation and a final presentation."
+  },
+  {
+    "question": "When is the membership deadline?",
+    "expected_chunks": [
+      "Membership Deadline: FBLA national membership dues must be paid to the specific division by 11:59 p.m. Eastern Time on March 1 of the current school year."
+    ],
+    "expected_response": "The membership deadline is 11:59 p.m. Eastern Time on March 1 of the current school year. "
+  },
+  {
+    "question": "What is the prompt for Website Coding and Development?",
+    "expected_chunks": [
+      "2025-2026 Topic School Lost-and-Found Website Design and code a fully functional lost-and-found website for your school community. The site should help students and staff report found items, search for lost belongings, and manage the claim process efficiently."
+    ],
+    "expected_response": "The prompt for Website Coding and Development is to create a lost-and-found website for your school community to help students and staff."
+  },
+  {
+    "question": "What is are the requirements for Website Coding and Development?",
+    "expected_chunks": [
+      "Your website must include: • A home page with a clear layout and navigation menu • A submission form for reporting found items, including the ability to upload photos • A searchable listing of all found items • A claim/inquiry form for students to request information about or claim a listed item • A basic backend system or admin view to review, approve, or manage item postings Focus on clean design, functionality, and user experience. You must code the website from scratch using code of your choice. Use of databases or other backend tools is encouraged to enhance functionality."
+    ],
+    "expected_response": "The requirements for Website Coding and Development are that the website should have a home page, navigation, forms to report and claim items, a backend system for managing postings, and be coded from scratch with a language of your choice."
+  },
+  {
+    "question": "What are the guidelines for internet access?",
+    "expected_chunks": [
+      "Technology Guidelines • Internet Access: Provided (Please be aware that internet access at conference venues may be unreliable. Always prepare a backup plan in case the connection is lost or does not work with your device.)"
+    ],
+    "expected_response": "The guidelines for internet access are that it is provided at conference venues, but may be unreliable, and competitors should prepare a back up plan in case the connection is lost or does not work."
+  }
+]
