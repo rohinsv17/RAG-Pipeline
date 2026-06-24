@@ -15,6 +15,7 @@ Usage:
 """
 
 import chromadb
+from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, CountVectorizer
 from openai import OpenAI
 from opentelemetry import trace
 from openinference.semconv.trace import SpanAttributes, OpenInferenceSpanKindValues
@@ -27,6 +28,7 @@ from config import (
     LLM_MODEL,
     TOP_K,
     MIN_SIMILARITY,
+    RRF_K,
     MAX_TOKENS,
     TEMPERATURE,
     SYSTEM_PROMPT,
@@ -84,14 +86,145 @@ class Retriever:
 
 
     # ─────────────────────────────────────────────
-    # STEP 2: RETRIEVE RELEVANT CHUNKS
+    # STEP 2: RETRIEVE RELEVANT CHUNKS THROUGH HYBRID SEARCH
     # ─────────────────────────────────────────────
 
-    # Searches ChromaDB for the most similar chunks to the query vector
-    def retrieveChunks(self, query_embedding: list[float]) -> list[dict]:
+    # Searches ChromaDB for the most similar chunks to the query embedding
+    def vectorSearch(self, query_embedding: list[float]) -> list[dict]:
 
-        # Opens a RETRIEVER custom span
-        with self.tracer.start_as_current_span("Vector Search") as span:
+        # Queries ChromaDB for the top K most similar chunks with their text, metadata and distances
+        vector_results = self.collection.query(query_embeddings = [query_embedding], n_results = TOP_K, include = ["documents", "metadatas", "distances"])
+
+        # Unpacks results from the outer list since ChromaDB supports multiple queries at once
+        documents = vector_results["documents"][0]
+        metadatas = vector_results["metadatas"][0]
+        distances = vector_results["distances"][0]
+        ids = vector_results["ids"][0]
+
+        # Initializes list to hold the vector search chunks
+        vector_chunks = []
+
+        for doc, meta, dist, chunk_id in zip(documents, metadatas, distances, ids):
+
+            # Converts cosine distance to similarity (0 = identical distance becomes 1 = identical similarity)
+            similarity = 1 - dist
+
+            # Skips chunks below the minimum similarity threshold
+            if(similarity < MIN_SIMILARITY):
+                continue
+
+            vector_chunks.append({
+                "id":chunk_id,
+                "text":doc,
+                "source":meta.get("source", "unknown"),
+                "page":meta.get("page", "?"),
+                "similarity":round(similarity, 4),
+                "rrf_score":0.0,
+            })
+
+        return vector_chunks
+
+    # Strips the question down to meaningful keywords
+    def extractKeywords(self, question: str) -> list[str]:
+
+        # Vectorizes question into tokens by word
+        tokenizer = CountVectorizer().build_tokenizer()
+        tokens = tokenizer(question.lower())
+
+        # Initializes the list that will hold the filtered keywords
+        keywords = []
+
+        # Loops through each token and removes stopwords
+        for token in tokens:
+            if(token not in ENGLISH_STOP_WORDS):
+                keywords.append(token)
+
+        return keywords
+    
+    # Searches ChromaDB for chunks containing keywords from the query
+    def keywordSearch(self, keywords: list[str]) -> list[dict]:
+
+        # Returns an empty list there are no keywords in the query
+        if(not keywords):
+            return []
+        
+        # Assigns keyword from list to a $contains filter
+        if(len(keywords) == 1):
+            keyword_filter = {"$contains": keywords[0]}
+        else:
+            # Initializes list to hold list of $contains keywords
+            contains_list = []
+
+            # Iterates through each keyword and adds to list
+            for keyword in keywords:
+                contains_list.append({"$contains": keyword})
+            
+            keyword_filter = {"$or": contains_list}
+
+        # Gets ChromaDB results with Keyword Search for relevant chunks with their text and metadata
+        keyword_results = self.collection.get(where_document = keyword_filter, include = ["documents", "metadatas"], limit = TOP_K)
+
+        # Unpacks the flat result lists
+        documents = keyword_results["documents"]
+        metadatas = keyword_results["metadatas"]
+        ids = keyword_results["ids"]
+
+        # Builds the chunk list in the order ChromaDB returned them
+        chunks = []
+
+        for doc, meta, chunk_id in zip(documents, metadatas, ids):
+            chunks.append({
+                "id":chunk_id,
+                "text":doc,
+                "source":meta.get("source", "unknown"),
+                "page":meta.get("page", "?"),
+                "rrf_score":0.0,
+            })
+
+        return chunks
+    
+    
+    # Uses RRF to fusion rank keyword chunks and vector chunks
+    def fusionRanking(self, vector_chunks: list[dict], keyword_chunks: list[dict]) -> list[dict]:
+
+        # Initializes a dictionary to hold combined chunks without duplicated results
+        chunk_data = {}
+
+        # Adds vector chunks to dictionary
+        for chunk in vector_chunks:
+            chunk_data[chunk["id"]] = chunk
+
+        # Adds keyword chunks to dictionary that were not retrieved by vector search
+        for chunk in keyword_chunks:
+            if(chunk["id"] not in chunk_data):
+                chunk_data[chunk["id"]] = chunk
+
+        # Adds to each chunk's RRF score based on its rank in vector search
+        for rank, chunk in enumerate(vector_chunks, start = 1):
+            chunk_data[chunk["id"]]["rrf_score"] += 1.0 / (RRF_K + rank)
+
+        # Adds to each chunk's RRF score based on its rank in the keyword search
+        for rank, chunk in enumerate(keyword_chunks, start = 1):
+            chunk_data[chunk["id"]]["rrf_score"] += 1.0 / (RRF_K + rank)
+
+        # Sorts dictionary in descending order order based on the RRF score of each chunk
+        chunk_data = dict(sorted(chunk_data.items(), key = lambda item: item[1]["rrf_score"], reverse = True))
+
+        # Initializes a list to hold final chunks trimmed to a top_k amount
+        fused_chunks = []
+
+        # Iterates through only top_k highest chunks and adds to final list of hybrid chunks
+        for chunk in list(chunk_data.values())[:TOP_K]:
+            chunk["rrf_score"] = round(chunk["rrf_score"], 4)
+            fused_chunks.append(chunk)
+
+        return fused_chunks
+
+    # Orchestrates vector search, keyword search, and fusion into a final ranked chunk list
+    def retrieveChunks(self, query_embedding: list[float], question: str) -> list[dict]:
+
+        # Opens a RETRIEVER span that encapsulates the entire hybrid retrieval process
+        with self.tracer.start_as_current_span("Hybrid Search") as span:
 
             # Marks this span as a retrieval operation in Phoenix's UI
             span.set_attribute(SpanAttributes.OPENINFERENCE_SPAN_KIND, OpenInferenceSpanKindValues.RETRIEVER.value)
@@ -102,45 +235,24 @@ class Retriever:
             # Records the minimum similarity threshold used to filter results
             span.set_attribute("retrieval.min_similarity", MIN_SIMILARITY)
 
-            # Queries ChromaDB with Vector Search for top K most similar chunks with their text, metadata and distances
-            vector_results = self.collection.query(query_embeddings = [query_embedding], n_results = TOP_K, include = ["documents", "metadatas", "distances"])
+            # Runs vector search against the query embedding and records how many vector chunks passed the ranking
+            vector_chunks = self.vectorSearch(query_embedding)
+            span.set_attribute("retrieval.vector_chunks_returned", len(vector_chunks))
 
-            # Queries ChromaDB with Keyword Search using BM25
-            #keyword_results = self.collection.query(query_texts = )
+            # Extracts meaningful keywords from the question and runs keyword search and records how many keyword chunks passed the ranking
+            keywords = self.extractKeywords(question)
+            keyword_chunks = self.keywordSearch(keywords)
+            span.set_attribute("retrieval.keyword_chunks_returned", len(keyword_chunks))
 
-            # Unpacks results from outer list since ChromaDB supports multiple queries at once
-            documents = vector_results["documents"][0]
-            metadatas  = vector_results["metadatas"][0]
-            distances  = vector_results["distances"][0]
+            # Fuses both result lists into a single ranked list using RRF
+            fused_chunks = self.fusionRanking(vector_chunks, keyword_chunks)
 
-            # Initializes list to hold retrieved chunks
-            chunks = []
+            # Records top RRF score to determine how the most relevant chunk scores
+            if(fused_chunks):
+                span.set_attribute("retrieval.top_rrf_score", fused_chunks[0]["rrf_score"])
 
-            for doc, meta, dist in zip(documents, metadatas, distances):
-                # Converts cosine distance to similarity (0 = identical distance becomes 1 = identical similarity)
-                similarity = 1 - dist
-
-                # Skips chunks below the minimum similarity threshold
-                if(similarity < MIN_SIMILARITY):
-                    continue
-
-                # Appends chunk text, source, page and similarity score to list
-                chunks.append({
-                    "text":doc,
-                    "source":meta.get("source", "unknown"),
-                    "page":meta.get("page", "?"),
-                    "similarity": round(similarity, 4),
-                })
-
-            # Records how many chunks passed the similarity filter
-            span.set_attribute("retrieval.chunks_returned", len(chunks))
-
-            # Records the top similarity score so you can spot weak retrievals at a glance
-            if(chunks):
-                span.set_attribute("retrieval.top_similarity", chunks[0]["similarity"])
-
-            return chunks
-
+            return fused_chunks
+                
 
     # ─────────────────────────────────────────────
     # STEP 3: BUILD THE PROMPT
@@ -207,18 +319,19 @@ class Retriever:
             # Step 1 — embed the question into a vector
             query_embedding = self.embedQuery(question)
 
-            # Step 2 — find the most relevant chunks from ChromaDB
-            chunks = self.retrieveChunks(query_embedding)
+            # Step 2 — hybrid search in Chroma and fuse chunks into a ranked list
+            chunks = self.retrieveChunks(query_embedding, question)
 
             # Returns early if no relevant chunks were found
             if(not chunks):
                 return "No relevant content found in the document for that question."
 
-            # Prints retrieved chunks and similarity scores if verbose mode is on
+            # Prints retrieved chunks, similarity scores, and RRF scores for verbose mode
             if(verbose):
-                print(f"\n--- Retrieved {len(chunks)} chunk(s) ---")
+                print(f"\n--- Retrieved {len(chunks)} chunk(s) after hybrid fusion ---")
                 for i, chunk in enumerate(chunks, start = 1):
-                    print(f"\n[{i}] {chunk['source']} p.{chunk['page']} (similarity: {chunk['similarity']})")
+                    similarity_label = f" | similarity: {chunk['similarity']}" if("similarity" in chunk) else ""
+                    print(f"\n[{i}] {chunk['source']} p.{chunk['page']} (rrf: {chunk['rrf_score']}{similarity_label})")
                     print(f"    {chunk['text'][:200]}...")
                 print(f"{'─'*50}\n")
 
