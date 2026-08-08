@@ -1,5 +1,26 @@
 [
   {
+    "question": "What did Space Policy Directive-5 address?",
+    "expected_chunks": [
+      "Memorandum on Space Policy Directive-5: Cybersecurity Principles for Space Systems"
+    ],
+    "expected_response": "Space Policy Directive-5 addressed cybersecurity principles for space systems."
+  },
+  {
+    "question": "Who were the two NASA astronauts on the SpaceX Demo-2 mission?",
+    "expected_chunks": [
+      "NASA astronauts Douglas Hurley (left) and Robert Behnken (right) participate in a dress rehearsal prior to the launch of NASA's SpaceX Demo-2 mission to the International Space Station on May 30, 2020."
+    ],
+    "expected_response": "The two NASA astronauts on the SpaceX Demo-2 mission were Douglas Hurley and Robert Behnken."
+  },
+  {
+    "question": "When did the Mars 2020 mission with the Perseverance rover launch?",
+    "expected_chunks": [
+      "NASA's Mars 2020 mission with the Perseverance rover onboard launches from Cape Canaveral Air Force Station in Florida on July 30, 2020."
+    ],
+    "expected_response": "The Mars 2020 mission with the Perseverance rover launched on July 30, 2020, from Cape Canaveral Air Force Station in Florida."
+  },  
+  {
     "question": "What is Artemis II and when is it expected to launch?",
     "expected_chunks": [
       "Artemis II, planned as the first crewed test flight of the Space Launch System (SLS) and the Orion spacecraft, is slated for launch in early spring 2026."

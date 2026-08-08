@@ -207,7 +207,7 @@ class Evaluator:
  
             # Retrieves the actual chunks the pipeline fetched for scoring context
             query_embedding  = retriever.embedQuery(question)
-            retrieved_chunks = retriever.retrieveChunks(query_embedding)
+            retrieved_chunks = retriever.retrieveChunks(query_embedding, question)
             retrieved_contexts  = [chunk["text"] for chunk in retrieved_chunks]
 
             # Runs asyncio to score retrieval with a temporary event loop
