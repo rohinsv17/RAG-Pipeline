@@ -1,5 +1,82 @@
 [
   {
+    "question": "What is the default coordinate system for an ImpulsiveBurn in GMAT?",
+    "expected_chunks": [
+      "CoordinateSystem Determines what coordinate system the orientation parameters, Element1, Element2, and Element3 refer to. This field cannot be modified in the Mission Sequence. Data Reference Array Type Allowed Local, EarthMJ2000Eq, EarthMJ2000Ec, Values EarthFixed, or any user defined system Access set Default Local Value"
+    ],
+    "expected_response": "The default coordinate system for an ImpulsiveBurn in GMAT is Local."
+  },
+  {
+    "question": "What is the coordinate system for a DefaultIB ImpulsiveBurn in GMAT?",
+    "expected_chunks": [
+      "ImpulsiveBurn DefaultIB DefaultIB.CoordinateSystem = Local"
+    ],
+    "expected_response": "The coordinate system for a DefaultIB ImpulsiveBurn in GMAT is Local."
+  },
+  {
+    "question": "What is GMAT licensed under?",
+    "expected_chunks": [
+      "GMAT is licensed under the Apache License 2.0."
+    ],
+    "expected_response": "GMAT is licensed under the Apache License 2.0."
+  },
+  {
+    "question": "What is the default installation location for GMAT on Windows?",
+    "expected_chunks": [
+      "By default, GMAT installs to the %LOCALAPPDATA% folder in your user directory, and does not require elevated privileges to install. On Windows Vista and Windows 7, this generally corresponds to the C:\\Users\\username\\AppData\\Local folder."
+    ],
+    "expected_response": "By default, GMAT installs to the %LOCALAPPDATA% folder in the user directory, which generally corresponds to C:\\Users\\username\\AppData\\Local on Windows Vista and Windows 7."
+  },
+  {
+    "question": "What is the output directory used for in GMAT?",
+    "expected_chunks": [
+      "The output directory is the default location for file output such as ephemeris files and report files. If no path information is provided for reports or ephemeris files created during a GMAT session, then those files will be written to the output folder."
+    ],
+    "expected_response": "The output directory is the default location for file output such as ephemeris files and report files, and is used when no path information is provided during a GMAT session."
+  },
+  {
+    "question": "What is the default value of the EquatorialRadius for a celestial body in GMAT?",
+    "expected_chunks": [
+      "EquatorialRadius The body's equatorial radius. Data Type Real Allowed Values Real > 0 Access set Default Value 6378.1363 Units km"
+    ],
+    "expected_response": "The default value of the EquatorialRadius for a celestial body in GMAT is 6378.1363 km."
+  },
+  {
+    "question": "What does the SolverIterations field set to None do in a GroundTrackPlot?",
+    "expected_chunks": [
+      "None Shows only the final solution after the end of an iterative process and draws only final solution to a plot"
+    ],
+    "expected_response": "When SolverIterations is set to None in a GroundTrackPlot, only the final solution after the end of an iterative process is shown and drawn to the plot."
+  },
+  {
+    "question": "What is the default value of the spacecraft's orbital eccentricity field in GMAT?",
+    "expected_chunks": [
+      "ECC The orbital eccentricity expressed in the coordinate system chosen in the CoordinateSystem field. Default Value 0.02454974900598137"
+    ],
+    "expected_response": "The default value of the orbital eccentricity field in GMAT is 0.02454974900598137."
+  },
+  {
+    "question": "What keyword is used to propagate backwards in GMAT's Propagate command?",
+    "expected_chunks": [
+      "To propagate backwards using the script interface, include the keyword BackProp between the Propagate command and the first Propagator in the command as shown below."
+    ],
+    "expected_response": "The keyword used to propagate backwards in GMAT's Propagate command is BackProp."
+  },
+  {
+    "question": "What character is used to begin a comment in the GMAT script language?",
+    "expected_chunks": [
+      "Comments begin with the percent symbol (\"%\", hex: 25) and extend to the end of the line. There is no multi-line or embedded comment in the script language."
+    ],
+    "expected_response": "Comments in the GMAT script language begin with the percent symbol and extend to the end of the line."
+  },
+  {
+    "question": "What keyboard shortcut opens the Find and Replace dialog box in the GMAT script editor?",
+    "expected_chunks": [
+      "Ctrl+F Open the Find and Replace dialog box."
+    ],
+    "expected_response": "The keyboard shortcut to open the Find and Replace dialog box in the GMAT script editor is Ctrl+F."
+  },
+  {
     "question": "What did Space Policy Directive-5 address?",
     "expected_chunks": [
       "Memorandum on Space Policy Directive-5: Cybersecurity Principles for Space Systems"
@@ -63,14 +140,6 @@
     "expected_response": "Examples of prohibited items are animals, food, and links and QR codes."
   },
   {
-    "question": "What are research expectations?",
-    "expected_chunks": [
-      "Research • Information must be supported by credible, well-documented sources. • Any use of copyrighted material, images, logos, or trademarks must be properly documented.",
-      "Compelling evidence from Sources/References"
-    ],
-    "expected_response": "Research expectations are that information should be supported by credible and well-documented sources, and use of copyrighted material should be documented."
-  },
-  {
     "question": "What is the presentation timing structure?",
     "expected_chunks": [
       "Details Timing Structure • Equipment Set-Up: 3 minutes • Presentation: 7 minutes (a one-minute warning will be provided) • Question & Answer (Q&A): 3 minutes • Note: Each time segment is exclusive. Once the 3-minute set-up period ends, the 7-minute presentation time begins automatically. Competitors may not shift time between segments."
@@ -104,6 +173,13 @@
       "Your website must include: • A home page with a clear layout and navigation menu • A submission form for reporting found items, including the ability to upload photos • A searchable listing of all found items • A claim/inquiry form for students to request information about or claim a listed item • A basic backend system or admin view to review, approve, or manage item postings Focus on clean design, functionality, and user experience. You must code the website from scratch using code of your choice. Use of databases or other backend tools is encouraged to enhance functionality."
     ],
     "expected_response": "The requirements for Website Coding and Development are that the website should have a home page, navigation, forms to report and claim items, a backend system for managing postings, and be coded from scratch with a language of your choice."
+  },
+  {
+    "question": "What are research expectations?",
+    "expected_chunks": [
+      "Research • Information must be supported by credible, well-documented sources. • Any use of copyrighted material, images, logos, or trademarks must be properly documented."
+    ],
+    "expected_response": "Research expectations are that information should be supported by credible and well-documented sources, and use of copyrighted material should be documented."
   },
   {
     "question": "What are the guidelines for internet access?",

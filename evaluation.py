@@ -1,9 +1,8 @@
 """
-evaluation.py — Evaluator class for the RAG pipeline
-------------------------------------------------------
-Scores answer quality using Ragas metrics and submits
-the results as annotations to Phoenix spans.
-
+Rohin Vijay
+Evaluation file for RAG
+--------------------------------
+Runs evaluation Golden Dataset against RAG and scores metrics based on output
 """
 
 import json
@@ -53,12 +52,10 @@ class Evaluator:
         self.groundedness_scorer = Faithfulness(llm = self.ragas_llm)
 
         # Initializes Ragas Completeness Scorer
-        self.completeness_scorer = DiscreteMetric(name = "Completness", allowed_values = ["pass", "fail"], prompt = "Check if the response contains points mentioned from the grading notes and return 'pass' or 'fail'.\nResponse: {response} Grading Notes: {grading_notes}")
+        self.completeness_scorer = DiscreteMetric(name = "Completeness", allowed_values = ["pass", "fail"], prompt = "Check if the response contains points mentioned from the grading notes and return 'pass' or 'fail'.\nResponse: {response} Grading Notes: {grading_notes}")
 
 
-    # ─────────────────────────────────────────────
-    # LOAD GOLDEN DATASET
-    # ─────────────────────────────────────────────
+    # Loads Golden Dataset file
     def loadGoldenDataset(self) -> list[dict]:
 
         # Checks the golden dataset file exists before trying to open it
@@ -79,9 +76,8 @@ class Evaluator:
         return dataset
     
 
-    # ─────────────────────────────────────────────
-    # SCORE RETRIEVAL
-    # ─────────────────────────────────────────────
+
+    # == RETRIEVAL SCORE ==
  
     # Asynchronously scores how well the retrieved chunks match the expected chunks using Ragas ContextRecall
     async def scoreRetrieval(self, question: str, retrieved_contexts: list[str], expected_chunks: list[str]) -> float:
@@ -99,9 +95,7 @@ class Evaluator:
         return round(result.value, 4)
 
 
-    # ─────────────────────────────────────────────
-    # SCORE RELEVANCY
-    # ─────────────────────────────────────────────
+    # == RELEVANCY SCORE ==
  
     # Asynchronously scores how relevant the answer is to the question using Ragas AnswerRelevancy
     async def scoreRelevancy(self, question: str, actual_response: str) -> float:
@@ -115,9 +109,7 @@ class Evaluator:
         return round(result.value, 4)
     
 
-    # ─────────────────────────────────────────────
-    # SCORE GROUNDEDNESS
-    # ─────────────────────────────────────────────
+    # == GROUNDEDNESS SCORE ==
  
     # Asynchronously scores how faithful the answer is to the retrieved chunks using Ragas Faithfullness
     async def scoreGroundedness(self, question: str, actual_response: str, retrieved_contexts: list[str]) -> float:
@@ -132,9 +124,7 @@ class Evaluator:
         return round(result.value, 4)
     
 
-    # ─────────────────────────────────────────────
-    # SCORE COMPLETENESS
-    # ─────────────────────────────────────────────
+    # == COMPLETENESS SCORE ==
  
     # Sycnronously scores how complete the LLM is to the question
     def scoreCompleteness(self, actual_response: str, expected_response: str) -> str:
@@ -147,11 +137,7 @@ class Evaluator:
         )
 
         return result.value
-    
-    # ─────────────────────────────────────────────
-    # LOAD AND SAVE RECORDS
-    # ─────────────────────────────────────────────
- 
+     
     # Loads existing eval records from disk or returns empty structure if none exist
     def loadRecords(self) -> dict:
  
@@ -175,12 +161,7 @@ class Evaluator:
             json.dump(records, file, indent = 2, ensure_ascii = False)
  
         print(f"[Evaluator] Records saved to '{EVAL_RECORDS_PATH}'")
-    
-
-    # ─────────────────────────────────────────────
-    # ORCHESTRATOR
-    # ─────────────────────────────────────────────
- 
+     
     # Runs full evaluation against golden dataset
     def evaluate(self) -> None:
 
@@ -203,12 +184,13 @@ class Evaluator:
             print(f"[{i + 1}/{len(dataset)}]")
  
             # Runs the RAG pipeline to get the actual answer for this question
-            actual_response  = retriever.ragOrchestrator(question, verbose = False)
+            actual_response  = retriever.ragOrchestrator(question, verbose = True)
  
             # Retrieves the actual chunks the pipeline fetched for scoring context
-            query_embedding  = retriever.embedQuery(question)
+            query_embedding = retriever.embedQuery(question)
             retrieved_chunks = retriever.retrieveChunks(query_embedding, question)
-            retrieved_contexts  = [chunk["text"] for chunk in retrieved_chunks]
+            retrieved_chunks = retriever.rerankChunks(question, retrieved_chunks)
+            retrieved_contexts = [chunk["text"] for chunk in retrieved_chunks]
 
             # Runs asyncio to score retrieval with a temporary event loop
             retrieval_score = asyncio.run(self.scoreRetrieval(question, retrieved_contexts, expected_chunks))
@@ -222,6 +204,18 @@ class Evaluator:
             # Scores completeness as either pass or fail
             completeness_score = self.scoreCompleteness(actual_response, expected_response)
     
+            # Initializes a list to hold reranked chunks
+            reranked_chunks = []
+
+            for chunk in retrieved_chunks:
+                reranked_chunks.append({
+                    "source":chunk["source"],
+                    "page":chunk["page"],
+                    "score":chunk["score"],
+                    "text":chunk["text"]
+                })
+
+
             # Packages all inputs, outputs and scores for this entry
             result = {
                 "question":question,
@@ -237,7 +231,8 @@ class Evaluator:
                     "rag_system": {
                         "completeness_score":completeness_score,
                     },
-                }
+                },
+                "retrieved_chunks":reranked_chunks
             }
 
             # Appends iteration result to the list of results
@@ -271,7 +266,8 @@ class Evaluator:
 
         # Initializes a dictionary to hold to expected thresholds
         expected_thresholds = {}
-        
+
+        # Designateds scores based on thresholds
         if(avg_retrieval > 0.8):
             expected_thresholds["retrieval_score"] = "pass"
         else:
@@ -316,14 +312,13 @@ class Evaluator:
         records["runs"].append(run_record)
         self.saveRecords(records)
         
- 
-# ─────────────────────────────────────────────
-# ENTRY POINT
-# ─────────────────────────────────────────────
- 
+ # Entry point runs program 
 if(__name__ == "__main__"):
+
+    # Initializes tracerprovider before Evaluator class is instantiated
     from tracing import initTracing
     initTracing()
- 
+
+    # Initializes Evaluator and runs evaluation
     evaluator = Evaluator()
     evaluator.evaluate()
