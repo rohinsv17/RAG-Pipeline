@@ -2,7 +2,8 @@
 Rohin Vijay
 Configuration file for RAG
 --------------------------------
-Defines paths, values, and settings for configuration of the RAG pipeline in different areas 
+Defines paths, values, and settings for configuration of the RAG pipeline in different areas
+Usage: Exists in same directory as RAG pipeline, values imported to other files
 """
 
 # Folder where your source PDFs live

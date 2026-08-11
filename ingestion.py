@@ -3,6 +3,9 @@ Rohin Vijay
 Ingestion file for RAG
 --------------------------------
 Ingests PDF and Docx files in chunks to the Vector DB
+Usage: Run ingestion.py in CLI, checks for any uningested files and ingests to Vector DB
+Have Docker Desktop application running for Qdrant container
+"docker run -p 6333:6333 -p 6334:6334 -v ./qdrant_storage:/qdrant/storage qdrant/qdrant" in open terminal to access Qdrant container
 """
 
 import os

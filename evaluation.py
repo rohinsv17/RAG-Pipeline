@@ -3,6 +3,8 @@ Rohin Vijay
 Evaluation file for RAG
 --------------------------------
 Runs evaluation Golden Dataset against RAG and scores metrics based on output
+Usage: Run evaluation.py in CLI
+Results of each run written to golden_dataset.json, creates golden_dataset.json if file does not exist
 """
 
 import json

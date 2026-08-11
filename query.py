@@ -2,7 +2,11 @@
 Rohin Vijay
 Retrieval and query answering file for RAG
 --------------------------------
-Allows users to ask queries on ingested documents and returns answers from the LLM with context from the ingestion 
+Allows users to ask queries on ingested documents and returns answers from the LLM with context from the ingestion
+Usage: Run query.py in CLI, type a query based on ingested documents, and receive an answer from LLM grounded to documents
+Have Docker Desktop application running for Qdrant container
+"docker run -p 6333:6333 -p 6334:6334 -v ./qdrant_storage:/qdrant/storage qdrant/qdrant" in open terminal to access Qdrant container
+Install Ollama, pull LLM model and run "ollama serve" in open terminal
 """
 
 from openai import OpenAI
