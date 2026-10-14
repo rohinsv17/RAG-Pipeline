@@ -1,34 +1,30 @@
 """
-query.py — Retriever class for the RAG pipeline
--------------------------------------------------
-Responsible for everything that happens at question time:
-embedding the query, searching ChromaDB for relevant chunks,
-assembling a prompt, and generating an answer with Gemma.
-
-Assumes ingestion.py has already been run and ChromaDB is populated.
-
-Usage:
-    from query import Retriever
-    retriever = Retriever()
-    answer = retriever.ask("What is the main argument of the document?")
-    print(answer)
+Rohin Vijay
+Retrieval and query answering file for RAG
+--------------------------------
+Allows users to ask queries on ingested documents and returns answers from the LLM with context from the ingestion
+Usage: Run query.py in CLI, type a query based on ingested documents, and receive an answer from LLM grounded to documents
+Have Docker Desktop application running for Qdrant container
+"docker run -p 6333:6333 -p 6334:6334 -v ./qdrant_storage:/qdrant/storage qdrant/qdrant" in open terminal to access Qdrant container
+Install Ollama, pull LLM model and run "ollama serve" in open terminal
 """
 
-import chromadb
-from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, CountVectorizer
 from openai import OpenAI
 from opentelemetry import trace
 from openinference.semconv.trace import SpanAttributes, OpenInferenceSpanKindValues
+from qdrant_client import QdrantClient, models
+from fastembed import SparseTextEmbedding
+from sentence_transformers.cross_encoder import CrossEncoder
 from config import (
-    CHROMA_DB_PATH,
-    CHROMA_COLLECTION_NAME,
+    QDRANT_URL,
+    QDRANT_COLLECTION_NAME,
     OLLAMA_BASE_URL,
     OLLAMA_API_KEY,
     EMBEDDING_MODEL,
     LLM_MODEL,
     TOP_K,
+    RERANK_K,
     MIN_SIMILARITY,
-    RRF_K,
     MAX_TOKENS,
     TEMPERATURE,
     SYSTEM_PROMPT,
@@ -37,24 +33,27 @@ from config import (
 # Retrieval and generation class
 class Retriever:
 
-    # Constructor sets up connections to ChromaDB and Ollama, and prints config summary
+    # Constructor sets up connections to Qdrant and Ollama, and prints config summary
     def __init__(self):
         print("[Retriever] Initializing...")
 
-        # Initializes ChromaDB client in folder
-        self.chroma_client = chromadb.PersistentClient(path = CHROMA_DB_PATH)
+        # Initializes Qdrant client in Docker
+        self.qdrant_client = QdrantClient(url = QDRANT_URL)
 
-        # Loads existing collection with cosine similarity
-        self.collection = self.chroma_client.get_or_create_collection(name = CHROMA_COLLECTION_NAME, metadata = {"hnsw:space": "cosine"})
+        # Initializes Qdrant fastembed Sparse Embedding model
+        self.sparse_model = SparseTextEmbedding(model_name = "Qdrant/bm25")
+
+        # Initializes Reranker model with capped input length
+        self.reranker = CrossEncoder("BAAI/bge-reranker-v2-m3", max_length = 512)
 
         # Initializes OpenAI client using Ollama as localhost
         self.ollama_client = OpenAI(base_url = OLLAMA_BASE_URL, api_key = OLLAMA_API_KEY)
 
-        # Gets a named tracer for this module — used to create custom spans
+        # Gets a named tracer for this module - used to create custom spans
         self.tracer = trace.get_tracer("rag.retriever")
 
-        chunk_count = self.collection.count()
-        print(f"[Retriever] Collection '{CHROMA_COLLECTION_NAME}' loaded — {chunk_count} chunks available")
+        chunk_count = self.qdrant_client.count(collection_name = QDRANT_COLLECTION_NAME).count
+        print(f"[Retriever] Collection '{QDRANT_COLLECTION_NAME}' loaded - {chunk_count} chunks available")
 
         # Warns if collection is empty meaning ingestion hasn't been run yet
         if(chunk_count == 0):
@@ -64,9 +63,7 @@ class Retriever:
         print(f"[Retriever] LLM: {LLM_MODEL}\n")
 
 
-    # ─────────────────────────────────────────────
-    # STEP 1: EMBED THE QUERY
-    # ─────────────────────────────────────────────
+    # == QUERY EMBEDDING ==
 
     # Embeds the user's question into a vector using the same model as ingestion
     def embedQuery(self, question: str) -> list[float]:
@@ -85,143 +82,10 @@ class Retriever:
         return embedding
 
 
-    # ─────────────────────────────────────────────
-    # STEP 2: RETRIEVE RELEVANT CHUNKS THROUGH HYBRID SEARCH
-    # ─────────────────────────────────────────────
-
-    # Searches ChromaDB for the most similar chunks to the query embedding
-    def vectorSearch(self, query_embedding: list[float]) -> list[dict]:
-
-        # Queries ChromaDB for the top K most similar chunks with their text, metadata and distances
-        vector_results = self.collection.query(query_embeddings = [query_embedding], n_results = TOP_K, include = ["documents", "metadatas", "distances"])
-
-        # Unpacks results from the outer list since ChromaDB supports multiple queries at once
-        documents = vector_results["documents"][0]
-        metadatas = vector_results["metadatas"][0]
-        distances = vector_results["distances"][0]
-        ids = vector_results["ids"][0]
-
-        # Initializes list to hold the vector search chunks
-        vector_chunks = []
-
-        for doc, meta, dist, chunk_id in zip(documents, metadatas, distances, ids):
-
-            # Converts cosine distance to similarity (0 = identical distance becomes 1 = identical similarity)
-            similarity = 1 - dist
-
-            # Skips chunks below the minimum similarity threshold
-            if(similarity < MIN_SIMILARITY):
-                continue
-
-            vector_chunks.append({
-                "id":chunk_id,
-                "text":doc,
-                "source":meta.get("source", "unknown"),
-                "page":meta.get("page", "?"),
-                "similarity":round(similarity, 4),
-                "rrf_score":0.0,
-            })
-
-        return vector_chunks
-
-    # Strips the question down to meaningful keywords
-    def extractKeywords(self, question: str) -> list[str]:
-
-        # Vectorizes question into tokens by word
-        tokenizer = CountVectorizer().build_tokenizer()
-        tokens = tokenizer(question.lower())
-
-        # Initializes the list that will hold the filtered keywords
-        keywords = []
-
-        # Loops through each token and removes stopwords
-        for token in tokens:
-            if(token not in ENGLISH_STOP_WORDS):
-                keywords.append(token)
-
-        return keywords
-    
-    # Searches ChromaDB for chunks containing keywords from the query
-    def keywordSearch(self, keywords: list[str]) -> list[dict]:
-
-        # Returns an empty list there are no keywords in the query
-        if(not keywords):
-            return []
-        
-        # Assigns keyword from list to a $contains filter
-        if(len(keywords) == 1):
-            keyword_filter = {"$contains": keywords[0]}
-        else:
-            # Initializes list to hold list of $contains keywords
-            contains_list = []
-
-            # Iterates through each keyword and adds to list
-            for keyword in keywords:
-                contains_list.append({"$contains": keyword})
-            
-            keyword_filter = {"$or": contains_list}
-
-        # Gets ChromaDB results with Keyword Search for relevant chunks with their text and metadata
-        keyword_results = self.collection.get(where_document = keyword_filter, include = ["documents", "metadatas"], limit = TOP_K)
-
-        # Unpacks the flat result lists
-        documents = keyword_results["documents"]
-        metadatas = keyword_results["metadatas"]
-        ids = keyword_results["ids"]
-
-        # Builds the chunk list in the order ChromaDB returned them
-        chunks = []
-
-        for doc, meta, chunk_id in zip(documents, metadatas, ids):
-            chunks.append({
-                "id":chunk_id,
-                "text":doc,
-                "source":meta.get("source", "unknown"),
-                "page":meta.get("page", "?"),
-                "rrf_score":0.0,
-            })
-
-        return chunks
-    
-    
-    # Uses RRF to fusion rank keyword chunks and vector chunks
-    def fusionRanking(self, vector_chunks: list[dict], keyword_chunks: list[dict]) -> list[dict]:
-
-        # Initializes a dictionary to hold combined chunks without duplicated results
-        chunk_data = {}
-
-        # Adds vector chunks to dictionary
-        for chunk in vector_chunks:
-            chunk_data[chunk["id"]] = chunk
-
-        # Adds keyword chunks to dictionary that were not retrieved by vector search
-        for chunk in keyword_chunks:
-            if(chunk["id"] not in chunk_data):
-                chunk_data[chunk["id"]] = chunk
-
-        # Adds to each chunk's RRF score based on its rank in vector search
-        for rank, chunk in enumerate(vector_chunks, start = 1):
-            chunk_data[chunk["id"]]["rrf_score"] += 1.0 / (RRF_K + rank)
-
-        # Adds to each chunk's RRF score based on its rank in the keyword search
-        for rank, chunk in enumerate(keyword_chunks, start = 1):
-            chunk_data[chunk["id"]]["rrf_score"] += 1.0 / (RRF_K + rank)
-
-        # Sorts dictionary in descending order order based on the RRF score of each chunk
-        chunk_data = dict(sorted(chunk_data.items(), key = lambda item: item[1]["rrf_score"], reverse = True))
-
-        # Initializes a list to hold final chunks trimmed to a top_k amount
-        fused_chunks = []
-
-        # Iterates through only top_k highest chunks and adds to final list of hybrid chunks
-        for chunk in list(chunk_data.values())[:TOP_K]:
-            chunk["rrf_score"] = round(chunk["rrf_score"], 4)
-            fused_chunks.append(chunk)
-
-        return fused_chunks
+    # == HYBRID SEARCH CHUNK RETRIEVAL ==
 
     # Orchestrates vector search, keyword search, and fusion into a final ranked chunk list
-    def retrieveChunks(self, query_embedding: list[float], question: str) -> list[dict]:
+    def retrieveChunks(self, dense_query: list[float], question: str) -> list[dict]:
 
         # Opens a RETRIEVER span that encapsulates the entire hybrid retrieval process
         with self.tracer.start_as_current_span("Hybrid Search") as span:
@@ -235,28 +99,85 @@ class Retriever:
             # Records the minimum similarity threshold used to filter results
             span.set_attribute("retrieval.min_similarity", MIN_SIMILARITY)
 
-            # Runs vector search against the query embedding and records how many vector chunks passed the ranking
-            vector_chunks = self.vectorSearch(query_embedding)
-            span.set_attribute("retrieval.vector_chunks_returned", len(vector_chunks))
+            # Creates a list to hold sparsely embedded query
+            sparse_embed = list(self.sparse_model.embed([question], batch_size = 32))[0]
 
-            # Extracts meaningful keywords from the question and runs keyword search and records how many keyword chunks passed the ranking
-            keywords = self.extractKeywords(question)
-            keyword_chunks = self.keywordSearch(keywords)
-            span.set_attribute("retrieval.keyword_chunks_returned", len(keyword_chunks))
+            # Initializes sparse vector for query
+            sparse_query = models.SparseVector(
+                indices = sparse_embed.indices.tolist(),
+                values = sparse_embed.values.tolist(),
+            )
 
-            # Fuses both result lists into a single ranked list using RRF
-            fused_chunks = self.fusionRanking(vector_chunks, keyword_chunks)
+            # Runs Qdrant hybrid search
+            results = self.qdrant_client.query_points(
+                collection_name = QDRANT_COLLECTION_NAME,
+                prefetch = [
+                    models.Prefetch(
+                        query = dense_query,
+                        using = "dense",
+                        limit = TOP_K,
+                    ),
+                    models.Prefetch(
+                        query = sparse_query,
+                        using = "sparse",
+                        limit = TOP_K
+                    )
+                ],
+                query = models.FusionQuery(fusion = models.Fusion.RRF),
+                limit = TOP_K,
+                with_payload = True,
+            )
 
-            # Records top RRF score to determine how the most relevant chunk scores
-            if(fused_chunks):
-                span.set_attribute("retrieval.top_rrf_score", fused_chunks[0]["rrf_score"])
+            # Initializes list to hold final chunks
+            chunks = []
 
-            return fused_chunks
+            # Unpacks points to be added to list
+            for point in results.points:
+                chunks.append({
+                    "text":   point.payload.get("text"),
+                    "source": point.payload.get("source"),
+                    "page":   point.payload.get("page"),
+                    "score":  round(point.score, 6),
+                })
+
+            # Records how many chunks were returned after fusion
+            span.set_attribute("retrieval.chunks_returned", len(chunks))
+
+            # Provides maximum score to Phoenix
+            if(chunks):
+                span.set_attribute("retrieval.top_score", chunks[0]["score"])
+
+            return chunks
+    
+    # Reranks retrieved chunks
+    def rerankChunks(self, question: str, chunks: list[dict]) -> str:
+        
+        # Creates a list of question and chunk pairs to be computed
+        sentence_pairs = []
+        for chunk in chunks:
+            sentence_pairs.append([question, chunk["text"]])
+
+        # Computes list of pairs for new scores and applies softmax to have results between 0 and 1
+        scores = self.reranker.predict(sentence_pairs, apply_softmax = True)
+
+        # Updates scores of each chunk
+        for chunk, score in zip(chunks, scores):
+            chunk["score"] = round(float(score), 6)
+
+        # Sorts chunk scores by ascending order
+        chunks.sort(key = lambda chunk: chunk["score"], reverse = True)
+
+        # Initializes list to hold top reranked chunks
+        reranked_chunks = []
+
+        # Iterates through sorted chunks for only the top RERANK_K chunks
+        for chunk in chunks[:RERANK_K]:
+            reranked_chunks.append(chunk)
+
+        return reranked_chunks
+
                 
-
-    # ─────────────────────────────────────────────
-    # STEP 3: BUILD THE PROMPT
-    # ─────────────────────────────────────────────
+    # == PROMPT ASSEMBLY ==
 
     # Assembles retrieved chunks and the question into a prompt string for Gemma
     def buildPrompt(self, question: str, chunks: list[dict]) -> str:
@@ -268,7 +189,7 @@ class Retriever:
             # Builds numbered context block with source and page label per chunk
             context_parts = []
             for i, chunk in enumerate(chunks, start = 1):
-                header = f"[Chunk {i} — {chunk['source']}, page {chunk['page']}]"
+                header = f"[Chunk {i} - {chunk['source']}, page {chunk['page']}]"
                 context_parts.append(f"{header}\n{chunk['text']}")
             # Joins all chunks into one context block separated by blank lines
             context_block = "\n\n".join(context_parts)
@@ -279,13 +200,9 @@ class Retriever:
         return prompt
 
 
-    # ─────────────────────────────────────────────
-    # STEP 4: GENERATE THE ANSWER
-    # ─────────────────────────────────────────────
+    # == LLM GENERATION ==
 
-    # Sends the assembled prompt to Gemma via Ollama and returns its response
-    # No manual span needed here — auto_instrument=True in tracing.py captures
-    # the OpenAI SDK call automatically as an LLM span with request and response
+    # Sends prompt to LLM and returns generated answer
     def generateAnswer(self, prompt: str) -> str:
 
         # Calls Gemma with system prompt for grounding and user prompt with context and question
@@ -294,16 +211,10 @@ class Retriever:
         # Returns the text content of Gemma's response
         return response.choices[0].message.content
 
-
-    # ─────────────────────────────────────────────
-    # ORCHESTRATOR
-    # ─────────────────────────────────────────────
-
     # Orchestrates the full query pipeline and returns a natural language answer
     def ragOrchestrator(self, question: str, verbose: bool = False) -> str:
 
         # Opens a root CHAIN span that wraps the entire query pipeline
-        # All child spans (embedQuery, retrieveChunks, generateAnswer) nest inside this
         with self.tracer.start_as_current_span("Root") as span:
 
             # Marks this as the top-level chain span in Phoenix's UI
@@ -313,32 +224,34 @@ class Retriever:
             span.set_attribute(SpanAttributes.INPUT_VALUE, question)
 
             # Returns early if no documents have been ingested yet
-            if(self.collection.count() == 0):
+            if(self.qdrant_client.count(collection_name = QDRANT_COLLECTION_NAME).count == 0):
                 return "No documents have been ingested yet. Please run ingestion.py first."
 
-            # Step 1 — embed the question into a vector
-            query_embedding = self.embedQuery(question)
+            # Step 1 - embed the question into a vector
+            dense_query = self.embedQuery(question)
 
-            # Step 2 — hybrid search in Chroma and fuse chunks into a ranked list
-            chunks = self.retrieveChunks(query_embedding, question)
+            # Step 2 - hybrid search in Qdrant and return fused ranked chunks
+            chunks = self.retrieveChunks(dense_query, question)
+
+            # Step 3 - Reranks RERANK_K chunks using reranker model
+            chunks = self.rerankChunks(question, chunks)
 
             # Returns early if no relevant chunks were found
             if(not chunks):
                 return "No relevant content found in the document for that question."
 
-            # Prints retrieved chunks, similarity scores, and RRF scores for verbose mode
+            # Prints retrieved chunks and scores for verbose mode
             if(verbose):
-                print(f"\n--- Retrieved {len(chunks)} chunk(s) after hybrid fusion ---")
+                print(f"\n--- Retrieved {len(chunks)} reranked chunks out of {TOP_K} chunks ---")
                 for i, chunk in enumerate(chunks, start = 1):
-                    similarity_label = f" | similarity: {chunk['similarity']}" if("similarity" in chunk) else ""
-                    print(f"\n[{i}] {chunk['source']} p.{chunk['page']} (rrf: {chunk['rrf_score']}{similarity_label})")
+                    print(f"\n[{i}] {chunk['source']} p.{chunk['page']} (score: {chunk['score']})")
                     print(f"    {chunk['text'][:200]}...")
-                print(f"{'─'*50}\n")
+                print(f"{'-'*50}\n")
 
-            # Step 3 — assemble the prompt from chunks and question
+            # Step 4 - assemble the prompt from chunks and question
             prompt = self.buildPrompt(question, chunks)
 
-            # Step 4 — generate and return the answer from Gemma
+            # Step 5 - generate and return the answer from Gemma
             answer = self.generateAnswer(prompt)
 
             # Records the final answer on the root span
@@ -347,30 +260,30 @@ class Retriever:
             return answer
 
 
-# ─────────────────────────────────────────────
-# ENTRY POINT — simple interactive loop
-# ─────────────────────────────────────────────
-
+# Entry point runs program
 if(__name__ == "__main__"):
-    # Must import and call initTracing before creating Retriever
-    # so the tracer provider is registered before any spans are opened
+
+    # Initializes tracerprovider before Retriever class is instantiated
     from tracing import initTracing
     initTracing()
 
+    # Initializes Retriever class
     retriever = Retriever()
+    print("RAG Pipeline - ready. Type 'quit' to exit.\n")
 
-    print("RAG Pipeline — ready. Type 'quit' to exit.\n")
-
+    # Runs query loop until user quits program
     while True:
         question = input("Question: ").strip()
 
+        # Ignores empty responses
         if(not question):
             continue
 
+        # Exits program based on user input
         if(question.lower() in ("quit", "exit", "q")):
-            print("Goodbye.")
             break
 
+        # Answers question using RAG
         answer = retriever.ragOrchestrator(question, verbose = True)
         print(f"\nAnswer: {answer}\n")
         print("=" * 50 + "\n")

@@ -1,42 +1,41 @@
 """
-ingestion.py — Ingester class for the RAG pipeline
-----------------------------------------------------
-Responsible for everything that happens before a question is asked:
-reading PDFs, cleaning and chunking text, embedding chunks, and
-storing them in ChromaDB.
-
-Run this once per document set (or re-run if your PDFs change).
-
-Usage:
-    from ingestion import Ingester
-    ingester = Ingester()
-    ingester.ingest_folder()
+Rohin Vijay
+Ingestion file for RAG
+--------------------------------
+Ingests PDF and Docx files in chunks to the Vector DB
+Usage: Run ingestion.py in CLI, checks for any uningested files and ingests to Vector DB
+Have Docker Desktop application running for Qdrant container
+"docker run -p 6333:6333 -p 6334:6334 -v ./qdrant_storage:/qdrant/storage qdrant/qdrant" in open terminal to access Qdrant container
 """
 
 import os
 import re
+import uuid
 import pdfplumber
 from docx import Document
-import chromadb
 from openai import OpenAI
+from fastembed import SparseTextEmbedding
+from qdrant_client import QdrantClient, models
 from config import (
     PDF_FOLDER,
-    CHROMA_DB_PATH,
-    CHROMA_COLLECTION_NAME,
+    QDRANT_URL,
+    QDRANT_COLLECTION_NAME,
+    QDRANT_VECTOR_SIZE,
     OLLAMA_BASE_URL,
     OLLAMA_API_KEY,
     EMBEDDING_MODEL,
     CHUNK_SIZE,
     CHUNK_OVERLAP,
     CHUNK_MIN_WORDS,
+    CHUNK_LARGE_THRESHOLD,
+    LARGE_CHUNK_SIZE
 )
 
 # Ingestion and embedding class
 class Ingester:
 
-    # ─────────────────────────────────────────────
-    # STEP 1: EXTRACTION
-    # ─────────────────────────────────────────────
+
+    # == EXTRACTION AND PREPROCESSING ==
 
     # Determines whether to call pdf or docx text extraction
     def extractText(self, file_path: str) -> list[dict]:
@@ -101,12 +100,6 @@ class Ingester:
         
         return pages
 
-
-
-    # ─────────────────────────────────────────────
-    # STEP 2: CLEANING
-    # ─────────────────────────────────────────────
-
     # Cleans extracted text
     def cleanText(self, text: str) -> str:
 
@@ -125,9 +118,7 @@ class Ingester:
         return text
 
 
-    # ─────────────────────────────────────────────
-    # STEP 3: CHUNKING
-    # ─────────────────────────────────────────────
+    # == CHUNKING ==
 
     # Chunks cleaned text using pre-configured settings for chunking
     def chunkText(self, text: str) -> list[str]:
@@ -147,13 +138,76 @@ class Ingester:
 
         return chunks
 
+    # Chunks text across pages for large documents
+    def chunkAcrossPages(self, pages: list[dict], chunk_size: int) -> list[dict]:
+    
+        # Initializes lists to hold all words per page and 
+        page_words = []
+        page_end_index = []
 
-    # ─────────────────────────────────────────────
-    # STEP 4: EMBEDDING
-    # ─────────────────────────────────────────────
+        # Iterates through each page
+        for page in pages:
+            # Splits page text into words
+            words = page["text"].split()
 
-    # Sends chunks to BGE-Large and retrieves vectors
-    def embedChunks(self, chunks: list[str]) -> list[list[float]]:
+            # Skips pages with no words
+            if(not words):
+                continue
+
+            # Appends words to list and records page number and end index of words as a tuple
+            page_words.extend(words)
+            page_end_index.append((page["page"], len(page_words) - 1))
+
+        # Initializes list to hold chunks and indices for chunking
+        chunks = []
+        start = 0
+        chunk_index = 0
+
+        # Iterates through all words and creates chunks according to settings
+        while(start < len(page_words)):
+            end = start + chunk_size
+
+            # Adds a section of words to the chunks list
+            chunk_text = " ".join(page_words[start:end])
+
+            # Records end index of chunk
+            chunk_end = min(end, len(page_words)) - 1
+
+            # Initializes variables to hold start and end page numbers
+            start_page = None
+            end_page = None
+
+            # Iterates through list of page end indices
+            for page_num, page_end in page_end_index:
+                # Assigns start and end page numbers for the chunk based on the end index of the chunk
+                if(start_page is None and page_end >= start):
+                    start_page = page_num
+                if(page_end >= chunk_end):
+                    end_page = page_num
+                    break
+
+            # Builds a single page number or range string for the payload
+            if(start_page == end_page):
+                page_label = start_page
+            else:
+                page_label = f"{start_page}-{end_page}"
+                
+            chunks.append({
+                "text":chunk_text,
+                "page":page_label,
+                "chunk_index":chunk_index,
+            })
+
+            start += chunk_size - CHUNK_OVERLAP
+            chunk_index += 1
+
+        return chunks
+
+
+    # == EMBEDDING ==
+
+    # Sends chunks to BGE-Large and retrieves dense vectors
+    def denseEmbedChunks(self, chunks: list[str]) -> list[list[float]]:
 
         # Initializes list to hold embeddings with batch size for efficiency
         all_embeddings = []
@@ -173,23 +227,64 @@ class Ingester:
             print(f"  Embedded chunks {i + 1}-{min(i + batch_size, len(chunks))} of {len(chunks)}")
 
         return all_embeddings
+    
+    # Uses fastembed to retrieve sparse vectors from chunks
+    def sparseEmbedChunks(self, chunks: list[str]) -> list[models.SparseVector]:
+
+        # Creates a list to hold sparsely embedded chunks
+        sparse_embeds = list(self.sparse_model.embed(chunks, batch_size = 32))
+
+        # Initializes list to hold sparse vectors
+        sparse_vectors = []
+
+        # Iterates through list of SparseEmbedding objects and appends to list as a vector
+        for embed in sparse_embeds:
+            sparse_vectors.append(models.SparseVector(
+                indices = embed.indices.tolist(),
+                values = embed.values.tolist(),
+            ))
+
+        return sparse_vectors
 
 
-    # ─────────────────────────────────────────────
-    # STEP 5: STORING
-    # ─────────────────────────────────────────────
+    # == STORING VECTORS ==
 
-    # Stores chunks into ChromaDB with embeddings and metadata
-    def storeChunks(self, chunk_ids: list[str], chunk_texts: list[str], embeddings: list[list[float]], metadatas: list[dict]) -> None:
+    # Stores dense and sparse vectors into Qdrant db as PointStructs
+    def storeChunks(self, chunk_ids: list[str], chunk_texts: list[str], dense_embeddings: list[list[float]], sparse_embeddings: list[models.SparseVector], metadatas: list[dict]) -> None:
 
-        # Adds data into ChromaDB collection
-        self.collection.add(ids = chunk_ids, documents = chunk_texts, embeddings = embeddings, metadatas = metadatas)
-        print(f"  Stored {len(chunk_ids)} chunks in ChromaDB")
+        # Initializes a list to hold a PointStruct
+        points = []
 
+        # Iterates through all chunks and creates a PointStruct to store vectors
+        for id, text, dense, sparse, meta in zip(chunk_ids, chunk_texts, dense_embeddings, sparse_embeddings, metadatas):
 
-    # ─────────────────────────────────────────────
-    # ORCHESTRATOR
-    # ─────────────────────────────────────────────
+            # Creates a uuid from the chunk id with the first 25 chars of text so that it can be fed into PointStructs
+            point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, id + text[:25]))
+
+            # Creates PointStruct for unique chunk id and appends to list
+            points.append(models.PointStruct(
+                id = point_id,
+                vector = {
+                    "dense": dense,
+                    "sparse": sparse,
+                },
+                payload = {
+                    "id": id,
+                    "text": text,
+                    "source": meta["source"],
+                    "page": meta["page"],
+                    "chunk": meta["chunk"],
+                }
+            ))
+
+        # Uploads batch of PointStructs to collection
+        self.qdrant_client.upload_points(
+            collection_name = QDRANT_COLLECTION_NAME,
+            points = points,
+            parallel = 4,
+            max_retries = 3,
+        )
+        print(f"[Ingester] Stored {len(points)} chunks in Qdrant")
 
     # Orchestrates entire ingestion process for PDFs and docx files
     def ingestFolder(self, folder: str = PDF_FOLDER) -> None:
@@ -203,19 +298,30 @@ class Ingester:
             print(f"[Ingester] No supported files found in '{folder}'.")
             return
 
-        # Fetch IDs already stored so we can skip duplicates
-        existing = self.collection.get(include = [])
-        existing_ids = set(existing["ids"])
+        # Fetch existing ids by scrolling all points in collection
+        existing_ids = set()
+        next_offset = 0
+        while next_offset is not None:
+            scroll_result, next_offset = self.qdrant_client.scroll(
+                collection_name = QDRANT_COLLECTION_NAME,
+                limit = 1000,
+                offset = next_offset,
+                with_vectors = False,
+            )
+
+            for point in scroll_result:
+                existing_ids.add(point.payload.get("id"))
+
 
         total_chunks_stored = 0
 
         for filename in supported_files:
             file_path = os.path.join(folder, filename)
-            print(f"\n{'─'*50}")
+            print(f"\n{'-'*50}")
             print(f"Processing: {filename}")
-            print(f"{'─'*50}")
+            print(f"{'-'*50}")
 
-            # Step 1 — extract
+            # Step 1 - extract
             pages = self.extractText(file_path)
             if(not pages):
                 print("  No extractable text found. Skipping.")
@@ -223,81 +329,136 @@ class Ingester:
             print(f"  Extracted {len(pages)} pages")
 
             # Collect all chunks across all pages for this PDF
-            chunk_ids    = []
-            chunk_texts  = []
-            metadatas    = []
+            chunk_ids = []
+            chunk_texts = []
+            metadatas = []
 
-            for page in pages:
-                # Step 2 — clean
-                cleaned = self.cleanText(page["text"])
+            # Chunks by connecting
+            if(len(pages) >= CHUNK_LARGE_THRESHOLD):
+                print(f"  Large document detected: ({len(pages)}), using chunk size of {LARGE_CHUNK_SIZE}")
 
-                # Step 3 — chunk
-                raw_chunks = self.chunkText(cleaned)
+                # Step 2 - cleans each page's text before passing to chunker
+                cleaned_pages = []
 
-                for i, chunk_text in enumerate(raw_chunks):
-                    # Filter out near-empty chunks
-                    if(len(chunk_text.split()) < CHUNK_MIN_WORDS):
+                for page in pages:
+                    cleaned_pages.append({
+                        "page": page["page"],
+                        "text": self.cleanText(page["text"]),
+                    })
+
+                # Step 3 - chunks across all pages as one combined word list
+                cross_page_chunks = self.chunkAcrossPages(cleaned_pages, LARGE_CHUNK_SIZE)
+
+                for chunk in cross_page_chunks:
+                    # Filters out near-empty chunks
+                    if(len(chunk["text"].split()) < CHUNK_MIN_WORDS):
                         continue
 
-                    # Build a unique, traceable ID for this chunk
-                    chunk_id = f"{filename}_p{page['page']}_c{i}"
+                    # Builds chunk ID using chunk index since there is no single page
+                    chunk_id = f"{filename}_c{chunk['chunk_index']}"
 
-                    # Skip if already ingested
+                    # Skips chunk if already ingested
                     if(chunk_id in existing_ids):
                         continue
 
                     chunk_ids.append(chunk_id)
-                    chunk_texts.append(chunk_text)
+                    chunk_texts.append(chunk["text"])
                     metadatas.append({
-                        "source": filename,
-                        "page":   page["page"],
-                        "chunk":  i,
+                        "source":filename,
+                        "page":chunk["page"],
+                        "chunk":chunk["chunk_index"],
                     })
+            else:
+                print(f"  Standard size document: ({len(pages)}), using chunk size of {CHUNK_SIZE}")
+
+                for page in pages:
+                    
+                    # Step 2 - clean
+                    cleaned = self.cleanText(page["text"])
+
+                    # Step 3 - chunk
+                    raw_chunks = self.chunkText(cleaned)
+
+                    for i, chunk_text in enumerate(raw_chunks):
+                        # Filter out near-empty chunks
+                        if(len(chunk_text.split()) < CHUNK_MIN_WORDS):
+                            continue
+
+                        # Build a unique, traceable ID for this chunk
+                        chunk_id = f"{filename}_p{page['page']}_c{i}"
+
+                        # Skip if already ingested
+                        if(chunk_id in existing_ids):
+                            continue
+
+                        chunk_ids.append(chunk_id)
+                        chunk_texts.append(chunk_text)
+                        metadatas.append({
+                            "source": filename,
+                            "page": page["page"],
+                            "chunk": i,
+                        })
 
             if(not chunk_ids):
-                print(f"  All chunks already in ChromaDB. Skipping.")
+                print(f"  All chunks already in Qdrant. Skipping.")
                 continue
 
             print(f"  Created {len(chunk_ids)} new chunks")
 
-            # Step 4 — embed
+            # Step 4 - embeds chunks into dense and sparse vectors
             print(f"  Embedding chunks (this is the slow part)...")
-            embeddings = self.embedChunks(chunk_texts)
+            dense_embeddings = self.denseEmbedChunks(chunk_texts)
+            sparse_embeddings = self.sparseEmbedChunks(chunk_texts)
 
-            # Step 5 — store
-            self.storeChunks(chunk_ids, chunk_texts, embeddings, metadatas)
+            # Step 5 - store
+            self.storeChunks(chunk_ids, chunk_texts, dense_embeddings, sparse_embeddings, metadatas)
             total_chunks_stored += len(chunk_ids)
 
-        # Summary
+        # Prints summary
         print(f"\n{'='*50}")
         print(f"Ingestion complete.")
         print(f"New chunks stored this run: {total_chunks_stored}")
-        print(f"Total chunks in collection: {self.collection.count()}")
+        print(f"Total chunks in collection: {self.qdrant_client.count(collection_name = QDRANT_COLLECTION_NAME).count}")
         print(f"{'='*50}\n")
 
-    # Constructor sets up connections to ChromaDB and Ollama, and prints config summary
+    # Constructor sets up connections to Qdrant and Ollama, and prints config summary
     def __init__(self):
         print("[Ingester] Initializing...")
 
-        # Initializes ChromaDB client in folder
-        self.chroma_client = chromadb.PersistentClient(path = CHROMA_DB_PATH)
+        # Initializes Qdrant client in Docker
+        self.qdrant_client = QdrantClient(url = QDRANT_URL)
 
-        # Initializes or retrieves data collection with cosine similarity
-        self.collection = self.chroma_client.get_or_create_collection(name = CHROMA_COLLECTION_NAME, metadata = {"hnsw:space": "cosine"})
+        # Initializes Qdrant fastembed Sparse Embedding model
+        self.sparse_model = SparseTextEmbedding(model_name = "Qdrant/bm25")
+
+        # If collection does not exist, creates a Qdrant collection with dense and sparse vector configs
+        if(not self.qdrant_client.collection_exists(collection_name = QDRANT_COLLECTION_NAME)):
+            self.qdrant_client.create_collection(
+                collection_name = QDRANT_COLLECTION_NAME,
+                vectors_config = {
+                    "dense": models.VectorParams(
+                        distance = models.Distance.COSINE,
+                        size = QDRANT_VECTOR_SIZE,
+                    )
+                },
+                sparse_vectors_config = {
+                    "sparse": models.SparseVectorParams(
+                        modifier = models.Modifier.IDF
+                    )
+                }
+            )
+            print(f"[Ingester] Created Qdrant Collection '{QDRANT_COLLECTION_NAME}'")
+        else:
+            print(f"[Ingester] Collection '{QDRANT_COLLECTION_NAME} already exists'")
 
         # Initializes OpenAI client using Ollama as localhost
         self.ollama_client = OpenAI(base_url = OLLAMA_BASE_URL, api_key = OLLAMA_API_KEY)
 
-        print(f"[Ingester] Connected to ChromaDB at '{CHROMA_DB_PATH}'")
-        print(f"[Ingester] Collection: '{CHROMA_COLLECTION_NAME}' ({self.collection.count()} chunks already stored)")
+        print(f"[Ingester] Connected to Qdrant at '{QDRANT_URL}'")
+        print(f"[Ingester] Collection: '{QDRANT_COLLECTION_NAME}' ({self.qdrant_client.count(collection_name = QDRANT_COLLECTION_NAME).count} chunks already stored)")
         print(f"[Ingester] Embedding model: {EMBEDDING_MODEL}\n")
 
-
-
-# ─────────────────────────────────────────────
-# ENTRY POINT
-# ─────────────────────────────────────────────
-
+# Entry point runs program
 if(__name__ == "__main__"):
     ingester = Ingester()
     ingester.ingestFolder()

@@ -1,117 +1,73 @@
 """
-config.py — Central configuration for the RAG pipeline
---------------------------------------------------------
-All tunable settings live here. Neither ingestion.py nor query.py
-should contain hardcoded values — they import from this file instead.
-
-To experiment (different model, chunk size, etc.), change it here
-and the rest of the pipeline picks it up automatically.
+Rohin Vijay
+Configuration file for RAG
+--------------------------------
+Defines paths, values, and settings for configuration of the RAG pipeline in different areas
+Usage: Exists in same directory as RAG pipeline, values imported to other files
 """
-
-import os
-
-# ─────────────────────────────────────────────
-# PATHS
-# ─────────────────────────────────────────────
 
 # Folder where your source PDFs live
 PDF_FOLDER = "."
 
-# Where ChromaDB writes its database files to disk
-# ChromaDB creates this folder automatically if it doesn't exist
-CHROMA_DB_PATH = "./chroma_db"
+
+#  == Qdrant ==
+
+# The name of the collection inside Vector DB that holds files
+QDRANT_COLLECTION_NAME = "documents"
+
+# URL where Vector DB writes files and retrieves data
+QDRANT_URL = "http://localhost:6333"
+
+# The number of dimensions in dense embedding vectors
+QDRANT_VECTOR_SIZE = 1024
 
 
-# ─────────────────────────────────────────────
-# CHROMADB
-# ─────────────────────────────────────────────
+# == Ollama ==
 
-# The name of the collection inside ChromaDB that holds your chunks.
-# Think of it like a table name in a regular database.
-# If you ingest multiple unrelated document sets, give each its own
-# collection name so their chunks don't get mixed together.
-CHROMA_COLLECTION_NAME = "documents"
-
-
-# ─────────────────────────────────────────────
-# OLLAMA
-# ─────────────────────────────────────────────
-
-# The URL where Ollama's local server listens.
-# Ollama exposes an OpenAI-compatible API here, which is why
-# the OpenAI SDK can talk to it without any other changes.
+# URL where Ollama runs locally
 OLLAMA_BASE_URL = "http://localhost:11434/v1"
 
-# Ollama requires *some* value in the api_key field of the SDK,
-# but it doesn't actually validate it — any non-empty string works.
+# Unvalidated API key for Ollama, required by client
 OLLAMA_API_KEY = "ollama"
 
-
-# ─────────────────────────────────────────────
-# MODELS
-# ─────────────────────────────────────────────
-
-# The embedding model — used by BOTH ingestion and querying.
-# Both phases must use the same model. If you change this after
-# ingesting, you must wipe ChromaDB and re-ingest, because the
-# new model produces vectors in a different space.
-# Pull with: ollama pull bge-large
+# Embedding model accessed through Ollama for converting text to dense vectors
 EMBEDDING_MODEL = "bge-large"
 
-# The LLM used to generate the final answer.
-# Only used in query.py. Safe to swap without re-ingesting.
+# LLM model accessed through Ollama for generating answers
 LLM_MODEL = "gemma4:31b-cloud"
 
 
-# ─────────────────────────────────────────────
-# CHUNKING
-# ─────────────────────────────────────────────
+# == Chunking ==
 
-# Target number of words per chunk.
-# ~400 words ≈ ~500 tokens, which fits comfortably inside most
-# LLM context windows while being specific enough to retrieve well.
-# Smaller = more precise retrieval, less context per chunk.
-# Larger = more context per chunk, less precise retrieval.
+# Maximum number of words per chunk retrieved
 CHUNK_SIZE = 400
 
-# Number of words to repeat at the start of each new chunk.
-# Prevents ideas that straddle a chunk boundary from being lost.
-# Rule of thumb: ~10-15% of CHUNK_SIZE.
+# Overlap size between chunks to maintain context properly
 CHUNK_OVERLAP = 50
 
-# Minimum words a chunk must have to be stored.
-# Filters out near-empty chunks from pages that only had a
-# header, page number, or a few words of content.
+# Minimum number of words a chunk can have
 CHUNK_MIN_WORDS = 20
 
+# Threshold for a large document to be chunked at a higher size
+CHUNK_LARGE_THRESHOLD = 500
 
-# ─────────────────────────────────────────────
-# RETRIEVAL
-# ─────────────────────────────────────────────
+# Maximum chunk size used for larger documents
+LARGE_CHUNK_SIZE = 800
 
-# How many chunks to retrieve per query (the "k" in kNN).
-# These retrieved chunks are what gets sent to the LLM as context.
-# More chunks = more context, but also more noise and a longer prompt.
-# 3-5 is a good starting range for most documents.
-TOP_K = 3
 
-# Minimum similarity score (0.0 to 1.0) a chunk must have to be included.
-# ChromaDB returns cosine distance (lower = more similar), so this is
-# converted at retrieval time. Set to 0.0 to disable filtering entirely.
-# Useful for preventing the LLM from receiving completely irrelevant chunks
-# when the question has no good match in the document.
+# == Retrieval ==
+
+# Number of chunks retrieved initally for queries
+TOP_K = 50
+
+# Number of chunks kept after reranking
+RERANK_K = 10
+
+# Minimum similarity score a relevant chunk can have
 MIN_SIMILARITY = 0.0
 
-# ─────────────────────────────────────────────
-# HYBRID SEARCH
-# ─────────────────────────────────────────────
 
-# Dampener constant for RRF formula
-RRF_K = 60
-
-# ─────────────────────────────────────────────
-# RAG EVALUATION
-# ─────────────────────────────────────────────
+# == Evaluation ==
 
 # Golden Dataset file path for evaluation
 GOLDEN_DATASET_PATH = "./golden_dataset.json"
@@ -120,27 +76,15 @@ GOLDEN_DATASET_PATH = "./golden_dataset.json"
 EVAL_RECORDS_PATH = "./eval_records.json"
 
 
-# ─────────────────────────────────────────────
-# LLM GENERATION
-# ─────────────────────────────────────────────
+# == LLM ==
 
-# Maximum tokens the LLM can generate in its response.
-# 1024 is enough for a thorough paragraph-length answer.
-# Raise it if you want longer, more detailed responses.
+# Maximum tokens the LLM can use in a generated response
 MAX_TOKENS = 1024
 
-# Controls randomness in the LLM's output.
-# 0.0 = deterministic, always picks the most likely next token (factual, consistent).
-# 1.0 = more creative and varied, but can drift or hallucinate more.
-# For RAG (grounded, factual answers), keep this low — 0.1 to 0.3.
+# Controls randomness in LLM output
 TEMPERATURE = 0.1
 
-# The system prompt sets the LLM's behaviour and constraints.
-# This is the most impactful thing to tune for answer quality.
-# Key instructions:
-#   - Only use the provided context (prevents hallucination)
-#   - Admit when the answer isn't in the context
-#   - Keep answers concise and grounded
+# Prompt given to LLM for proper answering and behavior
 SYSTEM_PROMPT = """You are a precise question-answering assistant.
 Answer the user's question using ONLY the context provided below.
 If the answer is not contained in the context, say "I don't have enough information in the provided document to answer that."
